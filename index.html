@@ -168,6 +168,7 @@
   .confirm-bg{align-items:center;padding:0 14px;}
   .confirm-bg .modal{border-radius:18px;max-width:400px;}
   .copy-target{display:flex;align-items:center;gap:10px;padding:10px 2px;font-weight:700;font-size:15px;cursor:pointer;}
+  .fav-row{padding:4px 2px;}
   .copy-target input[type=checkbox]{width:19px;height:19px;accent-color:var(--violet);flex:none;}
   .fav-cat-header{font-family:'Fredoka';font-weight:600;font-size:13px;margin:10px 0 2px;text-transform:uppercase;letter-spacing:0.03em;}
 
@@ -191,6 +192,17 @@
 </style>
 </head>
 <body>
+
+<div id="gateScreen" style="display:none;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center;font-family:'Nunito',sans-serif;">
+  <div style="font-size:44px;margin-bottom:10px;">🔒</div>
+  <p style="font-family:'Fredoka',cursive;font-size:22px;color:#2F5C57;margin:0 0 6px;">Mon carnet</p>
+  <p style="font-size:13px;color:#8a7f6a;margin:0 0 18px;">Entre le code d'accès de la famille</p>
+  <input id="gateInput" type="password" inputmode="numeric" autocomplete="off" placeholder="Code"
+    style="font-size:20px;text-align:center;letter-spacing:4px;border:1.5px solid #EFE2CC;border-radius:12px;padding:12px 16px;width:180px;max-width:80vw;">
+  <button id="gateBtn" style="margin-top:14px;border:none;background:#E8A17C;color:white;font-weight:700;
+    border-radius:12px;padding:11px 22px;font-size:15px;">Entrer</button>
+  <p id="gateError" style="color:#D66B5A;font-size:13px;margin-top:12px;display:none;">Code incorrect, réessaie.</p>
+</div>
 
 <div id="syncBadge" class="sync-badge"></div>
 <div class="app" id="app"><div class="empty-state">Chargement…</div></div>
@@ -274,6 +286,7 @@
     <h2>📅 Rappel Google Agenda</h2>
     <p class="desc" id="dueDesc"></p>
     <div class="field"><label>Date limite</label><input type="date" id="dueDate"></div>
+    <div class="field"><label>Heure (facultatif — 9h par défaut)</label><input type="time" id="dueTime"></div>
     <div class="modal-actions">
       <button class="btn ghost" id="dueCancel">Annuler</button>
       <button class="btn danger" id="dueRemove" style="display:none;">Retirer</button>
@@ -439,7 +452,7 @@ let saveTimer = null;
 function uid(){ return Math.random().toString(36).slice(2,9); }
 /* ============ CONFIGURATION — À MODIFIER ============
    Colle ici l'URL de ton déploiement Apps Script (celle qui se termine par /exec) */
-const API_URL = 'COLLE_TON_URL_EXEC_ICI';
+const API_URL = 'https://script.google.com/macros/s/AKfycbzSODAJqLNQJ8f-jDfZwV671fv9xzD4bZC8idJuepJxyjq8eSmoPIpUeADRvfFMUM-j/exec';
 
 /** Appel de l'API Apps Script avec délai maximum de 12 s.
     Le corps est envoyé en texte brut pour éviter la pré-vérification CORS. */
@@ -797,7 +810,7 @@ function renderCategory(cat, items, mode){
   let html = '<div class="category">'+
     '<div class="cat-pill" style="background:'+meta.color+';" onclick="toggleCat(\''+catEsc+'\')">'+
     '<svg class="chevron '+(isOpen?'open':'')+'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>'+
-    '<span class="cat-pill-badge">'+meta.emoji+'</span><h3>'+escapeHtml(cat)+'</h3>'+
+    '<span class="cat-pill-badge">'+meta.emoji+'</span><h3 onclick="event.stopPropagation();editCatLabel(this,\''+catEsc+'\')">'+escapeHtml(cat)+'</h3>'+
     '<span class="cat-pill-count">'+done+'/'+items.length+'</span>'+
     '<span class="cat-spacer"></span>'+
     (kidMode ? '' :
@@ -823,7 +836,7 @@ function renderItem(cat, it, color, mode){
     '<div class="circle-check '+(it.checked?'checked':'')+'" style="--dot-color:'+color+';" onclick="toggleItem(\''+catEsc+'\',\''+it.id+'\')">'+
     '<svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7"/></svg></div>'+
     '<div class="item-main"><div class="item-label" onclick="editLabel(this,\''+catEsc+'\',\''+it.id+'\')">'+escapeHtml(it.label)+'</div>'+
-    (mode==='admin' && it.due ? '<span class="due-chip '+(!it.checked && daysUntil(it.due)<0?'overdue':'')+'">'+shortDate(it.due)+'</span>' : '');
+    (mode==='admin' && it.due ? '<span class="due-chip '+(!it.checked && daysUntil(it.due)<0?'overdue':'')+'">'+shortDate(it.due)+(it.dueTime?' '+it.dueTime:'')+'</span>' : '');
   if(!kidMode){
     html += '<input class="note-input" placeholder="Note…" value="'+escapeHtml(it.note||'')+'" onchange="setNote(\''+catEsc+'\',\''+it.id+'\', this.value)">';
   }
@@ -840,12 +853,50 @@ function renderItem(cat, it, color, mode){
     } else if(mode==='admin'){
       const hasDue = !!it.due;
       const overdue = hasDue && !it.checked && daysUntil(it.due)!==null && daysUntil(it.due)<0;
-      html += '<button class="copy-btn due-btn '+(hasDue?(overdue?'overdue':'has-due'):'')+'" title="Rappel Google Agenda" onclick="openDueModal(\''+catEsc+'\',\''+it.id+'\')">📅</button>';
+      html += '<button class="copy-btn due-btn '+(hasDue?(overdue?'overdue':'has-due'):'')+'" style="margin-left:-15px;" title="Rappel Google Agenda" onclick="openDueModal(\''+catEsc+'\',\''+it.id+'\')">📅</button>';
     }
     html += '<button class="del-btn" onclick="deleteItem(\''+catEsc+'\',\''+it.id+'\')">✕</button>';
   }
   html += '</div>';
   return html;
+}
+
+/** Renommage direct d'une catégorie : le nom devient un champ d'édition, comme pour les articles */
+function editCatLabel(el, cat){
+  if(kidMode) return;
+  const cats = currentCats();
+  if(!cats[cat]) return;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'label-edit';
+  input.value = cat;
+  el.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  function commit(){
+    if(done) return; done = true;
+    const val = input.value.trim();
+    if(val && val !== cat){
+      if(cats[val]){
+        showToast('Une catégorie « '+val+' » existe déjà');
+      } else {
+        // Reconstruit l'objet en conservant l'ordre, avec la nouvelle clé à la même place
+        const reordered = {};
+        Object.keys(cats).forEach(function(k){ reordered[k===cat?val:k] = cats[k]; });
+        if(SINGLE_SPACES[screen]) getSpace(screen).categories = reordered;
+        else voyage.lists[activeMember].categories = reordered;
+        if(openCats[cat] !== undefined){ openCats[val] = openCats[cat]; delete openCats[cat]; }
+        scheduleSave(currentKind());
+      }
+    }
+    render();
+  }
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', function(ev){
+    if(ev.key==='Enter'){ ev.preventDefault(); commit(); }
+    if(ev.key==='Escape'){ done = true; render(); }
+  });
 }
 
 /** Renommage direct : le nom devient un champ d'édition, validé par Entrée ou en quittant le champ */
@@ -1097,7 +1148,7 @@ function favRowHtml(f, i){
   const already = Object.values(courses.categories).some(function(items){
     return items.some(function(x){ return x.label.trim().toLowerCase()===f.label.trim().toLowerCase(); });
   });
-  return '<label class="copy-target"><input type="checkbox" class="fav-one" value="'+i+'"'+(already?' disabled':'')+'> '+
+  return '<label class="copy-target fav-row"><input type="checkbox" class="fav-one" value="'+i+'"'+(already?' disabled':'')+'> '+
     escapeHtml(f.label)+(already?' <span style="color:#b9aa8c;font-size:10px;">déjà listé</span>':'')+
     '<button class="del-btn" style="margin-left:auto;" onclick="event.preventDefault();removeFavorite('+i+')">✕</button></label>';
 }
@@ -1220,10 +1271,12 @@ function openDueModal(cat, itemId){
   const it = currentCats()[cat].find(function(i){return i.id===itemId;});
   if(!it) return;
   dueContext = {cat:cat, itemId:itemId};
+  const heureTxt = it.due ? (it.dueTime ? ' à '+it.dueTime : '') : '';
   document.getElementById('dueDesc').textContent = it.due
-    ? '« '+it.label+' » a un rappel prévu le '+shortDate(it.due)+'. Tu peux changer la date ou le retirer.'
-    : 'Un événement sera créé dans l\'agenda Google de David le jour choisi à 9h, avec notification la veille et le matin même. Il sera supprimé automatiquement quand la tâche sera cochée.';
+    ? '« '+it.label+' » a un rappel prévu le '+shortDate(it.due)+heureTxt+'. Tu peux changer la date, l\'heure, ou le retirer.'
+    : 'Un événement sera créé dans l\'agenda Google de David à l\'heure choisie (9h par défaut), avec notification la veille et le matin même. Il sera supprimé automatiquement quand la tâche sera cochée.';
   document.getElementById('dueDate').value = it.due || '';
+  document.getElementById('dueTime').value = it.dueTime || '';
   document.getElementById('dueRemove').style.display = it.due ? 'block' : 'none';
   document.getElementById('dueOk').textContent = it.due ? 'Modifier' : 'Créer le rappel';
   document.getElementById('dueBg').classList.add('open');
@@ -1234,12 +1287,13 @@ document.getElementById('dueRemove').onclick = async function(){
   const it = currentCats()[dueContext.cat].find(function(i){return i.id===dueContext.itemId;});
   document.getElementById('dueBg').classList.remove('open'); dueContext=null;
   if(it && it.eventId){ gsRun('deleteDueEvent', it.eventId).catch(function(){}); }
-  if(it){ delete it.due; delete it.eventId; }
+  if(it){ delete it.due; delete it.dueTime; delete it.eventId; }
   render(); scheduleSave('admin'); showToast('📅 Rappel retiré');
 };
 document.getElementById('dueOk').onclick = async function(){
   if(!dueContext) return;
   const dateVal = document.getElementById('dueDate').value;
+  const timeVal = document.getElementById('dueTime').value; // facultatif, ex "14:30"
   if(!dateVal){ showToast('Choisis une date'); return; }
   const it = currentCats()[dueContext.cat].find(function(i){return i.id===dueContext.itemId;});
   document.getElementById('dueBg').classList.remove('open'); dueContext=null;
@@ -1247,8 +1301,8 @@ document.getElementById('dueOk').onclick = async function(){
   showToast('📅 Création du rappel…');
   try{
     if(it.eventId){ await gsRun('deleteDueEvent', it.eventId); } // remplace l'ancien
-    const eventId = await gsRun('createDueEvent', it.label, dateVal);
-    it.due = dateVal; it.eventId = eventId;
+    const eventId = await gsRun('createDueEvent', it.label, dateVal, timeVal || null);
+    it.due = dateVal; it.dueTime = timeVal || ''; it.eventId = eventId;
     render(); scheduleSave('admin');
     showToast('✅ Rappel créé dans Google Agenda');
   }catch(e){
@@ -1261,7 +1315,7 @@ function cleanupDueEvent(it, keepDue){
   if(it && it.eventId){
     gsRun('deleteDueEvent', it.eventId).catch(function(){});
     delete it.eventId;
-    if(!keepDue) delete it.due;
+    if(!keepDue){ delete it.due; delete it.dueTime; }
   }
 }
 /** Recrée le rappel agenda d'une tâche décochée par erreur (si la date n'est pas passée) */
@@ -1269,7 +1323,7 @@ async function restoreDueEvent(it){
   if(!it || !it.due || it.eventId) return;
   if(daysUntil(it.due) < 0){ showToast('📅 Date dépassée — modifie le rappel via 📅'); return; }
   try{
-    const eventId = await gsRun('createDueEvent', it.label, it.due);
+    const eventId = await gsRun('createDueEvent', it.label, it.due, it.dueTime || null);
     it.eventId = eventId;
     render(); scheduleSave('admin');
     showToast('📅 Rappel recréé dans l\'agenda');
@@ -1419,16 +1473,54 @@ document.getElementById('editSave').onclick = function(){
   render(); scheduleSave('trip');
 };
 
-if(API_URL.indexOf('COLLE_TON_URL') === 0){
-  document.getElementById('app').innerHTML =
-    '<div class="empty-state"><span class="emoji">⚙️</span>'+
-    '<h2 style="margin:0 0 6px;font-family:\'Fredoka\';">Configuration requise</h2>'+
-    '<p>Ouvre le fichier <b>index.html</b> et remplace <b>COLLE_TON_URL_EXEC_ICI</b> par l\'URL /exec de ton déploiement Apps Script.</p></div>';
-} else {
-  init();
+/* ============ CODE D'ACCÈS ============
+   Définis ici le code que la famille doit entrer une fois par appareil.
+   Ce n'est pas une vraie sécurité (le code est visible dans le code source
+   pour qui cherche), juste un petit filtre contre les liens égarés/curieux. */
+const ACCESS_CODE = '1322';
+const GATE_KEY = 'monCarnetUnlocked';
+
+function startApp(){
+  document.getElementById('gateScreen').style.display = 'none';
+  document.getElementById('syncBadge').style.display = '';
+  document.getElementById('app').style.display = '';
+  if(API_URL.indexOf('COLLE_TON_URL') === 0){
+    document.getElementById('app').innerHTML =
+      '<div class="empty-state"><span class="emoji">⚙️</span>'+
+      '<h2 style="margin:0 0 6px;font-family:\'Fredoka\';">Configuration requise</h2>'+
+      '<p>Ouvre le fichier <b>index.html</b> et remplace <b>COLLE_TON_URL_EXEC_ICI</b> par l\'URL /exec de ton déploiement Apps Script.</p></div>';
+  } else {
+    init();
+  }
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('sw.js').catch(function(){});
+  }
 }
-if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('sw.js').catch(function(){});
+
+function checkGate(){
+  const val = document.getElementById('gateInput').value.trim();
+  if(val.toLowerCase() === ACCESS_CODE.toLowerCase()){
+    try{ localStorage.setItem(GATE_KEY, 'yes'); }catch(e){}
+    startApp();
+  } else {
+    document.getElementById('gateError').style.display = 'block';
+    document.getElementById('gateInput').select();
+  }
+}
+document.getElementById('gateBtn').onclick = checkGate;
+document.getElementById('gateInput').addEventListener('keydown', function(ev){
+  if(ev.key==='Enter') checkGate();
+});
+
+let alreadyUnlocked = false;
+try{ alreadyUnlocked = localStorage.getItem(GATE_KEY) === 'yes'; }catch(e){}
+if(alreadyUnlocked || !ACCESS_CODE){
+  startApp();
+} else {
+  document.getElementById('gateScreen').style.display = 'flex';
+  document.getElementById('syncBadge').style.display = 'none';
+  document.getElementById('app').style.display = 'none';
+  setTimeout(function(){ document.getElementById('gateInput').focus(); }, 100);
 }
 </script>
 </body>
