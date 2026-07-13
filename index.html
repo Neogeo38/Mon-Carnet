@@ -1418,11 +1418,11 @@ document.getElementById('editSave').onclick = function(){
   render(); scheduleSave('trip');
 };
 
-if(API_URL.indexOf('https://script.google.com/macros/s/AKfycbzSODAJqLNQJ8f-jDfZwV671fv9xzD4bZC8idJuepJxyjq8eSmoPIpUeADRvfFMUM-j/exec') === 0){
+if(!API_URL || API_URL.indexOf('https://script.google.com') !== 0){
   document.getElementById('app').innerHTML =
     '<div class="empty-state"><span class="emoji">⚙️</span>'+
     '<h2 style="margin:0 0 6px;font-family:\'Fredoka\';">Configuration requise</h2>'+
-    '<p>Ouvre le fichier <b>index.html</b> et remplace <b>https://script.google.com/macros/s/AKfycbzSODAJqLNQJ8f-jDfZwV671fv9xzD4bZC8idJuepJxyjq8eSmoPIpUeADRvfFMUM-j/execI</b> par l\'URL /exec de ton déploiement Apps Script.</p></div>';
+    '<p>Ouvre le fichier <b>index.html</b> et vérifie la ligne <b>const API_URL</b>.</p></div>';
 } else {
   init();
 }
