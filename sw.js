@@ -3,7 +3,7 @@
    toujours par le réseau (les données doivent rester fraîches).
    IMPORTANT : incrémente CACHE (v2, v3, ...) à chaque mise à jour visuelle
    pour forcer tous les appareils à récupérer la nouvelle version. */
-const CACHE = 'mon-carnet-v2';
+const CACHE = 'mon-carnet-v3';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', function(e){
