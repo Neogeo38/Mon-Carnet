@@ -26,6 +26,7 @@
 
   .sync-badge{max-width:560px;margin:0 auto;padding:7px 12px;border-radius:10px;font-size:11px;font-weight:700;display:none;}
   .sync-badge.warn{background:#FFF3D6;border:1.5px solid #E8C96A;color:#7A5A00;}
+  .sync-badge.off{background:#EDEDED;border:1.5px solid #C9C9C9;color:#555;}
 
   button{font-family:'Nunito',sans-serif;cursor:pointer;}
   .btn{border:none;border-radius:11px;padding:9px 13px;font-weight:700;font-size:14px;background:var(--paper);color:var(--teal-deep);box-shadow:var(--shadow);}
@@ -450,6 +451,52 @@ let selectedTemplateKey = 'ete';
 let pollHandle = null;
 let dirtyKinds = {};    // {trip:true, courses:true} — espaces en attente de sauvegarde
 let saveTimer = null;
+let saving = false;     // évite les envois simultanés pendant les reprises hors ligne
+
+/* ============ MODE HORS LIGNE ============
+   L'état complet est photographié dans localStorage à chaque changement.
+   Au démarrage, cette copie locale est affichée IMMÉDIATEMENT (même sans réseau),
+   puis l'application tente de se synchroniser en arrière-plan.
+   Les modifications faites hors connexion restent marquées "en attente" (dirtyKinds)
+   et sont renvoyées automatiquement dès que la connexion revient. */
+const LOCAL_KEY = 'monCarnetLocal';
+function saveLocalSnapshot(){
+  try{
+    localStorage.setItem(LOCAL_KEY, JSON.stringify({
+      voyage: voyage, courses: courses, admin: admin, maison: maison,
+      favorites: favorites, history: history,
+      customTemplate: customTemplate, singleTemplates: singleTemplates,
+      version: localVersion,
+      pending: Object.keys(dirtyKinds).filter(function(k){ return dirtyKinds[k]; }),
+      savedAt: Date.now()
+    }));
+  }catch(e){}
+}
+function loadLocalSnapshot(){
+  try{
+    const raw = localStorage.getItem(LOCAL_KEY);
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+function hasDirty(){
+  return Object.keys(dirtyKinds).some(function(k){ return dirtyKinds[k]; });
+}
+function updateOnlineBadge(){
+  const b = document.getElementById('syncBadge');
+  if(!b) return;
+  if(navigator.onLine === false){
+    b.className='sync-badge off';
+    b.textContent='📴 Hors ligne — tes modifications sont gardées sur ce téléphone';
+    b.style.display='block';
+  } else if(b.className.indexOf('off') !== -1){
+    b.style.display='none';
+  }
+}
+window.addEventListener('online', function(){
+  updateOnlineBadge();
+  if(hasDirty()) doSave(); else pollOnce();
+});
+window.addEventListener('offline', updateOnlineBadge);
 
 function uid(){ return Math.random().toString(36).slice(2,9); }
 /* ============ CONFIGURATION — À MODIFIER ============
@@ -482,6 +529,7 @@ function gsRun(fnName){
 let failCount = 0;
 function noteSuccess(){ failCount = 0; hideReload(); }
 function noteFailure(){
+  if(navigator.onLine === false){ updateOnlineBadge(); return; } // hors ligne : pas de bandeau rouge
   failCount++;
   if(failCount >= 2) showReload();
 }
@@ -506,8 +554,11 @@ function showToast(msg){
 }
 function setSyncBadge(state){
   const b = document.getElementById('syncBadge');
-  if(state==='error'){ b.className='sync-badge warn'; b.textContent='⚠ Synchronisation impossible — nouvelle tentative automatique'; b.style.display='block'; }
-  else { b.style.display='none'; }
+  if(state==='error'){
+    if(navigator.onLine === false){ updateOnlineBadge(); return; }
+    b.className='sync-badge warn'; b.textContent='⚠ Synchronisation impossible — nouvelle tentative automatique'; b.style.display='block';
+  }
+  else { b.style.display='none'; updateOnlineBadge(); }
 }
 function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function esc(s){ return (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
@@ -564,15 +615,34 @@ function migrate(state){
 
 /* ============ SYNCHRONISATION ============ */
 async function init(){
+  // 1) Affichage immédiat depuis la copie locale (fonctionne sans réseau)
+  const snap = loadLocalSnapshot();
+  if(snap){
+    voyage = snap.voyage || null;
+    courses = snap.courses || null;
+    admin = snap.admin || null;
+    maison = snap.maison || null;
+    favorites = snap.favorites || [];
+    history = snap.history || {};
+    customTemplate = snap.customTemplate || null;
+    singleTemplates = snap.singleTemplates || {};
+    localVersion = snap.version || 0;
+    (snap.pending || []).forEach(function(k){ dirtyKinds[k] = true; });
+    render();
+    updateOnlineBadge();
+  }
+  // 2) Synchronisation en arrière-plan
   try{
-    const state = await gsRun('getState');
-    migrate(state);
-    customTemplate = state.template ? JSON.parse(state.template) : null;
-    loadSingleTemplates(state);
-    favorites = state.favorites ? JSON.parse(state.favorites) : [];
-    history = state.history ? JSON.parse(state.history) : {};
-    localVersion = state.version;
-  }catch(e){ setSyncBadge('error'); }
+    if(hasDirty()){
+      await pushPending();          // renvoie d'abord les modifications faites hors ligne
+    }
+    await refreshState(false);      // puis récupère l'état frais du serveur
+    noteSuccess();
+    setSyncBadge('none');
+  }catch(e){
+    if(!snap) setSyncBadge('error'); // rien à afficher ET pas de réseau
+    else updateOnlineBadge();        // on reste sur la copie locale
+  }
   render();
   startPolling();
 }
@@ -582,7 +652,8 @@ function startPolling(){
 }
 async function pollOnce(){
   if(document.hidden) return; // page en veille : on ne sollicite pas le serveur
-  if(dirtyKinds.trip || dirtyKinds.courses) return;
+  if(navigator.onLine === false){ updateOnlineBadge(); return; } // hors ligne : on attend le retour du réseau
+  if(hasDirty()){ doSave(); return; } // des modifications attendent : on les renvoie en priorité
   try{
     const v = await gsRun('getVersion');
     noteSuccess();
@@ -598,6 +669,7 @@ async function refreshState(notify){
   favorites = state.favorites ? JSON.parse(state.favorites) : [];
   history = state.history ? JSON.parse(state.history) : {};
   localVersion = state.version;
+  saveLocalSnapshot(); // copie locale à jour pour le mode hors ligne
   if(screen==='voyage' && voyage && !voyage.members.find(function(m){return m.id===activeMember;})){
     activeMember = voyage.members.length ? voyage.members[0].id : null;
   }
@@ -608,6 +680,9 @@ async function refreshState(notify){
    on resynchronise immédiatement pour vérifier que la session est encore vivante */
 document.addEventListener('visibilitychange', function(){
   if(!document.hidden){
+    updateOnlineBadge();
+    if(navigator.onLine === false) return;
+    if(hasDirty()){ doSave(); return; }
     gsRun('getVersion').then(function(v){
       noteSuccess();
       if(v !== localVersion) refreshState(false).catch(function(){ noteFailure(); });
@@ -616,13 +691,16 @@ document.addEventListener('visibilitychange', function(){
 });
 function scheduleSave(kind){
   if(kind) dirtyKinds[kind] = true;
+  saveLocalSnapshot(); // sécurise tout de suite sur l'appareil, même si l'app est fermée avant l'envoi
   clearTimeout(saveTimer);
   saveTimer = setTimeout(doSave, 700);
 }
-async function doSave(attempt){
-  attempt = attempt||0;
-  const kinds = Object.keys(dirtyKinds).filter(function(k){return dirtyKinds[k];});
+/* Envoie tous les espaces en attente vers le serveur. Lève une erreur si l'envoi échoue. */
+async function pushPending(){
+  if(saving) return;
+  saving = true;
   try{
+    const kinds = Object.keys(dirtyKinds).filter(function(k){return dirtyKinds[k];});
     for(let i=0;i<kinds.length;i++){
       const kind = kinds[i];
       const payload = kind==='trip' ? JSON.stringify(voyage) : JSON.stringify(getSpace(kind));
@@ -630,11 +708,25 @@ async function doSave(attempt){
       localVersion = v;
       dirtyKinds[kind] = false;
     }
+    saveLocalSnapshot(); // plus rien en attente : copie locale propre
+  } finally {
+    saving = false;
+  }
+}
+async function doSave(attempt){
+  attempt = attempt||0;
+  saveLocalSnapshot();
+  if(saving) return; // un envoi est déjà en cours
+  if(navigator.onLine === false){ updateOnlineBadge(); return; } // hors ligne : reprise à l'événement 'online' ou au prochain polling
+  try{
+    await pushPending();
     noteSuccess();
     setSyncBadge('none');
   }catch(e){
     if(attempt<2){ setTimeout(function(){doSave(attempt+1);}, 1500*(attempt+1)); }
-    else { noteFailure(); setSyncBadge('error'); dirtyKinds = {}; }
+    else { noteFailure(); setSyncBadge('error'); }
+    // Les modifications restent marquées "en attente" (dirtyKinds) et seront
+    // renvoyées automatiquement : événement online, retour au premier plan, ou polling.
   }
 }
 
